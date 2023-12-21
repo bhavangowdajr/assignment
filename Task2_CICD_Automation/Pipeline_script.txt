@@ -1,0 +1,66 @@
+pipeline {
+    agent {
+        label 'Master'
+    }
+
+    // Define environment variables for better organization
+    environment {
+        registry = "90738379735.dkr.ecr.ap-south-1.amazonaws.com/myrepo"
+        imageversion = "latest"
+        ecraccount = "90738379735.dkr.ecr.ap-south-1.amazonaws.com"
+    }
+
+    // Define the stages of the pipeline
+    stages {
+        // Stage 1: Checkout SCM
+        stage("Declarative: Checkout SCM") {
+            steps {
+                // Use Git to clone the repository with specified branch and Bitbucket credentials
+                git branch: 'qa-7.4', credentialsId: 'bitbucket', url: 'https://bitbucket.org/desknineteam/mytestrepo.git'
+            }
+        }
+
+        // Stage 2: Docker Image Build
+        stage("Docker Image") {
+            steps {
+                script {
+                    // Remove existing Docker image with BUILD_NUMBER and build a new one
+                    sh "sudo docker rmi ${registry}:${BUILD_NUMBER}-1 || true"
+                    sh "sudo docker build -t ${registry}:${BUILD_NUMBER} ."
+                }
+            }
+        }
+
+        // Stage 3: Push to ECR Repository
+        stage('Push to repo') {
+            steps {
+                script {
+                    // Authenticate Docker with ECR, tag the Docker image, and push to ECR repository
+                    sh "sudo aws ecr get-login-password --region ap-south-1 | sudo docker login --username AWS --password-stdin ${ecraccount}"
+                    sh "sudo docker tag ${registry}:${BUILD_NUMBER} ${registry}:${BUILD_NUMBER}"
+                    sh "sudo docker push ${registry}:${BUILD_NUMBER}"
+                }
+            }
+        }
+
+        // Stage 4: Deploy to EKS Cluster
+        stage('K8S Deploy') {
+            steps {
+                script {
+                    // Update Kubeconfig for EKS Cluster and set the new Docker image in the Kubernetes deployment
+                    sh "sudo aws eks --region ap-south-1 update-kubeconfig --name MY-EKS-CLUSTER"
+                    sh "sudo kubectl set image deployments/my-deployment my-container=${registry}:${BUILD_NUMBER}"
+                }
+            }
+        }
+    }
+
+    // Post-deployment action: Send email notification
+    post {
+        always {
+            mail to: "bhavangowda831@gmail.com",
+            subject: "Jenkins Deployment: ${currentBuild.currentResult}: ${env.JOB_NAME}",
+            body: "${currentBuild.currentResult}: Job ${env.JOB_NAME}\nMore Info can be found here: ${env.BUILD_URL}"
+        }
+    }
+}
